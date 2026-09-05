@@ -4,10 +4,13 @@
 from __future__ import annotations
 
 import csv
+import difflib
 import gzip
+import hashlib
 import io
 import json
 import re
+import unicodedata
 import urllib.request
 from collections import defaultdict
 from pathlib import Path
@@ -131,6 +134,58 @@ POSITION_RATING_COLUMNS = {
     "ST": ("st", "ls", "rs"),
 }
 
+FIFA_ATTRIBUTE_ALIASES = {
+    "pace": ("pace",), "shooting": ("shooting",), "passing": ("passing",),
+    "dribbling": ("dribbling",), "defending": ("defending",), "physical": ("physic", "physical"),
+    "acceleration": ("acceleration", "movement_acceleration"),
+    "sprintSpeed": ("sprint_speed", "movement_sprint_speed"),
+    "agility": ("agility", "movement_agility"), "balance": ("balance", "movement_balance"),
+    "reactions": ("reactions", "movement_reactions"), "ballControl": ("ball_control", "skill_ball_control"),
+    "composure": ("composure", "mentality_composure"), "crossing": ("crossing", "attacking_crossing"),
+    "finishing": ("finishing", "attacking_finishing"),
+    "headingAccuracy": ("heading_accuracy", "attacking_heading_accuracy"),
+    "shortPassing": ("short_pass", "short_passing", "attacking_short_passing"),
+    "volleys": ("volleys", "attacking_volleys"), "longPassing": ("long_pass", "long_passing", "skill_long_passing"),
+    "curve": ("curve", "skill_curve"), "freeKickAccuracy": ("free_kick_accuracy", "skill_fk_accuracy"),
+    "shotPower": ("shot_power", "power_shot_power"), "longShots": ("long_shots", "power_long_shots"),
+    "interceptions": ("interceptions", "mentality_interceptions"),
+    "positioning": ("att_position", "positioning", "mentality_positioning"),
+    "vision": ("vision", "mentality_vision"), "penalties": ("penalties", "mentality_penalties"),
+    "marking": ("marking", "defending_marking_awareness"),
+    "standingTackle": ("stand_tackle", "standing_tackle", "defending_standing_tackle"),
+    "slidingTackle": ("slide_tackle", "sliding_tackle", "defending_sliding_tackle"),
+    "strength": ("strength", "power_strength"), "stamina": ("stamina", "power_stamina"),
+    "jumping": ("jumping", "power_jumping"), "aggression": ("aggression", "mentality_aggression"),
+    "gkDiving": ("gk_diving", "goalkeeping_diving"), "gkHandling": ("gk_handling", "goalkeeping_handling"),
+    "gkKicking": ("gk_kicking", "goalkeeping_kicking"), "gkReflexes": ("gk_reflexes", "goalkeeping_reflexes"),
+    "gkPositioning": ("gk_positioning", "goalkeeping_positioning"),
+}
+
+FAKE_NAME_PATTERNS = (
+    r"^player\s*\d+$", r"^fake(?:\s+player)?", r"^generic(?:\s+player)?",
+    r"^random(?:\s+player)?", r"^unnamed(?:\s+player)?", r"^dummy(?:\s+player)?",
+    r"^unknown(?:\s+player)?", r"^newgen", r"^资料待补", r"^青训\s*\d+$",
+)
+
+PREMIER_LEAGUE_CSV = (
+    "https://raw.githubusercontent.com/datasets/football-datasets/"
+    "main/datasets/premier-league/season-{short}.csv"
+)
+
+CLUB_ALIASES = {
+    "man united": "manchester united", "man city": "manchester city",
+    "tottenham": "tottenham hotspur", "west brom": "west bromwich albion",
+    "qpr": "queens park rangers", "nottm forest": "nottingham forest",
+    "newcastle": "newcastle united", "wolves": "wolverhampton wanderers",
+    "brighton": "brighton and hove albion", "leicester": "leicester city",
+    "leeds": "leeds united", "west ham": "west ham united", "stoke": "stoke city",
+    "swansea": "swansea city", "hull": "hull city", "norwich": "norwich city",
+    "cardiff": "cardiff city", "huddersfield": "huddersfield town",
+    "bournemouth": "afc bournemouth", "luton": "luton town", "ipswich": "ipswich town",
+    "birmingham": "birmingham city", "wigan": "wigan athletic", "blackburn": "blackburn rovers",
+    "bolton": "bolton wanderers", "charlton": "charlton athletic", "sheffield utd": "sheffield united",
+}
+
 
 def fetch_text(url: str) -> str:
     if url in TEXT_CACHE:
@@ -144,6 +199,31 @@ def fetch_text(url: str) -> str:
 
 def clean(value) -> str:
     return str(value or "").strip()
+
+
+def clean_player_name(value: str) -> str:
+    name = re.sub(r"\s+-\s*$", "", clean(value)).strip()
+    # A few community mirrors prefix display names with a two-digit row/year marker.
+    name = re.sub(r"^\d{2}[\s\u00a0]+(?=[A-Za-zÀ-ÖØ-öø-ÿ])", "", name).strip()
+    return name
+
+
+def is_fake_name(name: str) -> bool:
+    value = clean(name).lower()
+    return not value or any(re.search(pattern, value, re.I) for pattern in FAKE_NAME_PATTERNS)
+
+
+def identity_key(value: str) -> str:
+    value = unicodedata.normalize("NFKD", clean(value)).encode("ascii", "ignore").decode().lower()
+    value = value.replace("&", " and ").replace("'", "")
+    value = re.sub(r"\b(?:football club|fc|afc|cf|ac)\b", " ", value)
+    value = re.sub(r"[^a-z0-9]+", " ", value).strip()
+    return CLUB_ALIASES.get(value, value)
+
+
+def stable_id(prefix: str, *parts: str) -> str:
+    digest = hashlib.sha1("|".join(identity_key(part) for part in parts).encode()).hexdigest()[:16]
+    return f"{prefix}-{digest}"
 
 
 def first(row: dict[str, str], *names: str) -> str:
@@ -247,12 +327,40 @@ def row_matches_edition(row: dict[str, str], edition: int) -> bool:
     return (year is not None and int(year) == edition) or season == str(edition)[-2:].lstrip("0")
 
 
+def fetch_premier_league_teams(start_year: int) -> list[str]:
+    short = f"{start_year % 100:02d}{(start_year + 1) % 100:02d}"
+    text = fetch_text(PREMIER_LEAGUE_CSV.format(short=short))
+    reader = csv.DictReader(io.StringIO(text))
+    teams: list[str] = []
+    for row in reader:
+        for field in ("HomeTeam", "AwayTeam"):
+            name = clean(row.get(field))
+            if name and name not in teams:
+                teams.append(name)
+    if len(teams) != 20:
+        raise RuntimeError(f"Premier League {start_year} team-list check failed: {len(teams)}")
+    return teams
+
+
+def match_club(source_name: str, available: list[str]):
+    wanted = identity_key(source_name)
+    exact = [name for name in available if identity_key(name) == wanted]
+    if len(exact) == 1:
+        return exact[0], "normalized-exact"
+    ranked = sorted(
+        ((difflib.SequenceMatcher(None, wanted, identity_key(name)).ratio(), name) for name in available),
+        reverse=True,
+    )
+    if ranked and ranked[0][0] >= .82 and (len(ranked) == 1 or ranked[0][0] - ranked[1][0] >= .08):
+        return ranked[0][1], f"unambiguous-fuzzy-{ranked[0][0]:.2f}"
+    return None, "unmatched"
+
+
 def normalize_player(row: dict[str, str], start_year: int, source: str):
-    name = first(row, "short_name", "name", "full_name", "long_name", "player_name")
-    name = re.sub(r"\s+-\s*$", "", name).strip()
+    name = clean_player_name(first(row, "short_name", "name", "full_name", "long_name", "player_name"))
     club = first(row, "club_name", "club", "team_name", "team")
     league = first(row, "league_name", "club_league_name", "league", "competition")
-    if not name or not club or club.lower() in {"free agents", "free agent", "nan", "none"}:
+    if is_fake_name(name) or not club or club.lower() in {"free agents", "free agent", "nan", "none"}:
         return None
     if start_year != 2004 and not is_top_league(league):
         return None
@@ -267,6 +375,7 @@ def normalize_player(row: dict[str, str], start_year: int, source: str):
         match = re.search(r"(19|20)\d{2}", birth)
         if match:
             age = start_year - int(match.group())
+    age_estimated = age is None
     if age is None:
         age = 24
 
@@ -281,7 +390,8 @@ def normalize_player(row: dict[str, str], start_year: int, source: str):
         first(row, "club_position"),
         first(row, "position"),
     )
-    if not positions:
+    position_estimated = not positions
+    if position_estimated:
         positions = infer_positions(row)
     jersey = number(first(row, "club_jersey_number", "jersey_number", "number", "club_kit_number"))
     value = money_millions(first(row, "value_eur", "value", "market_value", "marketvalue"))
@@ -289,13 +399,47 @@ def normalize_player(row: dict[str, str], start_year: int, source: str):
     club_position = re.sub(r"<[^>]*>", " ", first(row, "club_position")).upper().strip()
     role = "后备／青年" if club_position in {"SUB", "RES", "U23", "U21", "U19"} else "一线队"
 
+    source_player_id = first(row, "sofifa_id", "player_id", "playerid", "id")
+    full_name = clean_player_name(first(row, "long_name", "full_name", "player_name")) or name
+    canonical_id = f"fifa-{source_player_id}" if source_player_id else stable_id("player", full_name, birth)
+    attributes = {}
+    for field, aliases in FIFA_ATTRIBUTE_ALIASES.items():
+        value = rating_number(first(row, *aliases))
+        if value is not None:
+            attributes[field] = max(1, min(99, int(round(value))))
     player = {
+        "canonicalPlayerId": canonical_id,
+        "fifaId": source_player_id or None,
         "name": name,
+        "fullName": full_name,
+        "dateOfBirth": birth or None,
+        "nationality": first(row, "nationality_name", "nationality", "country") or None,
+        "heightCm": int(number(first(row, "height_cm", "height"))) if number(first(row, "height_cm", "height")) else None,
         "sourcePos": "/".join(positions[:4]),
         "positions": positions[:4],
+        "registeredPosition": positions[0],
+        "playablePositions": positions[:4],
+        "primaryPosition": positions[0],
+        "secondaryPositions": positions[1:4],
+        "fifaRegisteredPosition": positions[0],
+        "fifaPlayablePositions": positions[:4],
+        "positionEstimated": position_estimated,
+        "positionEstimationMethod": "highest FIFA positional rating within four points" if position_estimated else None,
+        "positionConfidence": "medium" if position_estimated else "high",
         "age": max(15, min(45, int(round(age)))),
+        "ageEstimated": age_estimated,
         "overall": max(40, min(99, int(round(overall)))),
         "potential": max(40, min(99, int(round(potential)))),
+        "fifaVersion": first(row, "fifa_version", "year", "version") or f"FIFA {start_year + 1}",
+        "fifaDataYear": start_year,
+        "fifaSource": source,
+        "fifaConfidence": "high",
+        "fifaAttributes": attributes,
+        "pesId": None,
+        "pesVersion": None,
+        "pesOverall": None,
+        "pesRegisteredPosition": None,
+        "pesPlayablePositions": [],
         "role": role,
         "source": source,
     }
@@ -311,8 +455,8 @@ def normalize_player(row: dict[str, str], start_year: int, source: str):
     preferred_foot = first(row, "preferred_foot", "preferredfoot")
     if preferred_foot:
         player["preferredFoot"] = preferred_foot
-    player_id = first(row, "sofifa_id", "player_id", "playerid", "id")
-    return club, player_id, player
+    player["rawSource"] = {str(k): clean(v) for k, v in row.items() if k is not None and clean(v)}
+    return club, source_player_id, player
 
 
 def build_one(start_year: int, config: dict):
@@ -344,6 +488,29 @@ def build_one(start_year: int, config: dict):
         for club, players in sorted(teams.items())
         if len(players) >= 8
     }
+    official_teams = fetch_premier_league_teams(start_year)
+    club_matches = []
+    premier_data_clubs: set[str] = set()
+    for official_name in official_teams:
+        data_name, method = match_club(official_name, list(packed))
+        if data_name:
+            premier_data_clubs.add(data_name)
+        club_matches.append({
+            "officialName": official_name,
+            "dataName": data_name,
+            "canonicalClubId": stable_id("club", official_name, "England"),
+            "matchMethod": method,
+            "playersFound": len(packed.get(data_name, [])) if data_name else 0,
+        })
+
+    # Stage one preserves complete source rows for Premier League records only.
+    # Other leagues remain compact so the existing browser loader stays fast.
+    for club, players in packed.items():
+        for player in players:
+            player["canonicalClubId"] = stable_id("club", club, "England" if club in premier_data_clubs else "")
+            if club not in premier_data_clubs:
+                player.pop("rawSource", None)
+
     player_count = sum(len(players) for players in packed.values())
     if len(packed) < 15 or player_count < 250:
         raise RuntimeError(
@@ -359,6 +526,19 @@ def build_one(start_year: int, config: dict):
         "exact": True,
         "clubCount": len(packed),
         "playerCount": player_count,
+        "leagues": {
+            "Premier League": {
+                "country": "England",
+                "officialTeamSource": PREMIER_LEAGUE_CSV.format(
+                    short=f"{start_year % 100:02d}{(start_year + 1) % 100:02d}"
+                ),
+                "clubsExpected": 20,
+                "clubsFound": len(premier_data_clubs),
+                "playersFound": sum(len(packed[name]) for name in premier_data_clubs),
+                "clubs": club_matches,
+                "confidence": "high" if len(premier_data_clubs) == 20 else "partial",
+            }
+        },
         "teams": packed,
     }
     OUT.mkdir(parents=True, exist_ok=True)
