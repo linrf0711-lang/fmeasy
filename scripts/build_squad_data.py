@@ -127,6 +127,7 @@ def row_matches_edition(row: dict[str, str], edition: int) -> bool:
 
 def normalize_player(row: dict[str, str], start_year: int, source: str):
     name = first(row, "short_name", "name", "full_name", "long_name", "player_name")
+    name = re.sub(r"\s+-\s*$", "", name).strip()
     club = first(row, "club_name", "club", "team_name", "team")
     league = first(row, "league_name", "club_league_name", "league", "competition")
     if not name or not club or club.lower() in {"free agents", "free agent", "nan", "none"}:
@@ -177,7 +178,8 @@ def normalize_player(row: dict[str, str], start_year: int, source: str):
         player["marketValue"] = value
     if loan_from:
         player["loanFrom"] = loan_from
-    return club, player
+    player_id = first(row, "sofifa_id", "player_id", "playerid", "id")
+    return club, player_id, player
 
 
 def build_one(start_year: int, config: dict):
@@ -197,15 +199,15 @@ def build_one(start_year: int, config: dict):
         normalized = normalize_player(row, start_year, config["label"])
         if not normalized:
             continue
-        club, player = normalized
-        key = re.sub(r"[^a-z0-9]", "", player["name"].lower())
+        club, player_id, player = normalized
+        key = player_id or re.sub(r"[^a-z0-9]", "", player["name"].lower())
         previous = teams[club].get(key)
         if previous is None or player["overall"] > previous["overall"]:
             teams[club][key] = player
         kept_rows += 1
 
     packed = {
-        club: sorted(players.values(), key=lambda item: (-item["overall"], item["name"]))
+        club: sorted(players.values(), key=lambda item: (-item["overall"], item["name"]))[:35]
         for club, players in sorted(teams.items())
         if len(players) >= 8
     }
