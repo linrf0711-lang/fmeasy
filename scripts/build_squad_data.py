@@ -174,7 +174,8 @@ PREMIER_LEAGUE_CSV = (
 
 CLUB_ALIASES = {
     "man united": "manchester united", "man city": "manchester city",
-    "tottenham": "tottenham hotspur", "west brom": "west bromwich albion",
+    "tottenham": "tottenham hotspur", "spurs": "tottenham hotspur",
+    "west brom": "west bromwich albion", "west bromwich": "west bromwich albion",
     "qpr": "queens park rangers", "nottm forest": "nottingham forest",
     "newcastle": "newcastle united", "wolves": "wolverhampton wanderers",
     "brighton": "brighton and hove albion", "leicester": "leicester city",
@@ -183,6 +184,7 @@ CLUB_ALIASES = {
     "cardiff": "cardiff city", "huddersfield": "huddersfield town",
     "bournemouth": "afc bournemouth", "luton": "luton town", "ipswich": "ipswich town",
     "birmingham": "birmingham city", "wigan": "wigan athletic", "blackburn": "blackburn rovers",
+    "derby": "derby county",
     "bolton": "bolton wanderers", "charlton": "charlton athletic", "sheffield utd": "sheffield united",
 }
 
