@@ -1,0 +1,35 @@
+name: Build season squad data
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - scripts/build_squad_data.py
+      - .github/workflows/build-squad-data.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: squad-data
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Build compact season files
+        run: python3 scripts/build_squad_data.py
+      - name: Validate JSON
+        run: |
+          python3 -m json.tool data/squads/2004.json >/dev/null
+          python3 -m json.tool data/squads/2025.json >/dev/null
+      - name: Upload generated data
+        uses: actions/upload-artifact@v4
+        with:
+          name: season-squads
+          path: data/squads
