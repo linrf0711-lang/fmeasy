@@ -32,4 +32,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: season-squads
-          path: data/squads
+          path: data/squads/*.json.gz
