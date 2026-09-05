@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import csv
+import gzip
 import io
 import json
 import re
@@ -227,7 +228,10 @@ def build_one(start_year: int, config: dict):
     }
     OUT.mkdir(parents=True, exist_ok=True)
     target = OUT / f"{start_year}.json"
-    target.write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    content = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    target.write_bytes(content)
+    with gzip.open(f"{target}.gz", "wb", compresslevel=9) as archive:
+        archive.write(content)
     print(f"Wrote {target.relative_to(ROOT)}: {len(packed)} clubs / {player_count} players", flush=True)
 
 
