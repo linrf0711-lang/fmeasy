@@ -26,7 +26,7 @@ SOURCES = {
         "label": "Kaggle · FIFA 22 Complete Player Dataset",
     },
     2022: {
-        "url": "https://huggingface.co/datasets/jsulz/FIFA23/resolve/main/players_23.csv",
+        "url": "https://raw.githubusercontent.com/sumairrathore/Project_4/main/data/raw_data/players_23.csv",
         "label": "Kaggle · FIFA 23 Complete Player Dataset",
     },
     2023: {
