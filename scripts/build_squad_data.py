@@ -22,15 +22,15 @@ SOURCES = {
         "filter_year": 2005,
     },
     2021: {
-        "url": "https://raw.githubusercontent.com/stefanoleone992/fifa-players-ratings/master/data/players_22.csv",
+        "url": "https://raw.githubusercontent.com/abineshta/FIFA-22-complete-player-dataset-EDA/main/players_22.csv",
         "label": "Kaggle · FIFA 22 Complete Player Dataset",
     },
     2022: {
-        "url": "https://raw.githubusercontent.com/stefanoleone992/fifa-players-ratings/master/data/players_23.csv",
+        "url": "https://huggingface.co/datasets/jsulz/FIFA23/resolve/main/players_23.csv",
         "label": "Kaggle · FIFA 23 Complete Player Dataset",
     },
     2023: {
-        "url": "https://raw.githubusercontent.com/stefanoleone992/fifa-players-ratings/master/data/players_24.csv",
+        "url": "https://raw.githubusercontent.com/elouanzer/AAAproject_FC24/main/male_players.csv",
         "label": "Kaggle · EA Sports FC 24 Complete Player Dataset",
     },
     2024: {
