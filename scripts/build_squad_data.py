@@ -99,6 +99,38 @@ SECOND_TIER_PATTERNS = (
     "championship",
 )
 
+POSITION_ALIASES = {
+    "GK": "GK", "G": "GK",
+    "SW": "CB", "CB": "CB", "LCB": "CB", "RCB": "CB",
+    "LB": "LB", "LWB": "LWB", "RB": "RB", "RWB": "RWB",
+    "DM": "DM", "CDM": "DM", "LDM": "DM", "RDM": "DM",
+    "LCDM": "DM", "RCDM": "DM",
+    "CM": "CM", "LCM": "CM", "RCM": "CM",
+    "AM": "AM", "CAM": "AM", "LAM": "AM", "RAM": "AM",
+    "LCAM": "AM", "RCAM": "AM",
+    "LM": "LM", "LWM": "LW", "RM": "RM", "RWM": "RW",
+    "LW": "LW", "LF": "LW", "RW": "RW", "RF": "RW",
+    "CF": "CF", "ST": "ST", "LS": "ST", "RS": "ST",
+}
+
+POSITION_RATING_COLUMNS = {
+    "GK": ("gk",),
+    "CB": ("cb", "lcb", "rcb"),
+    "LB": ("lb",),
+    "LWB": ("lwb",),
+    "RB": ("rb",),
+    "RWB": ("rwb",),
+    "DM": ("cdm", "ldm", "rdm"),
+    "CM": ("cm", "lcm", "rcm"),
+    "AM": ("cam", "lam", "ram"),
+    "LM": ("lm",),
+    "RM": ("rm",),
+    "LW": ("lw", "lf"),
+    "RW": ("rw", "rf"),
+    "CF": ("cf",),
+    "ST": ("st", "ls", "rs"),
+}
+
 
 def fetch_text(url: str) -> str:
     if url in TEXT_CACHE:
@@ -128,6 +160,61 @@ def number(value, default=None):
         return float(str(value).replace(",", "").strip())
     except (TypeError, ValueError):
         return default
+
+
+def rating_number(value, default=None):
+    match = re.search(r"-?\d+(?:\.\d+)?", clean(value).replace(",", ""))
+    return number(match.group()) if match else default
+
+
+def parse_positions(*values) -> list[str]:
+    positions: list[str] = []
+    for value in values:
+        text = re.sub(r"<[^>]*>", " ", clean(value)).upper()
+        for token in re.findall(r"[A-Z]{1,5}", text):
+            position = POSITION_ALIASES.get(token)
+            if position and position not in positions:
+                positions.append(position)
+    return positions
+
+
+def infer_positions(row: dict[str, str]) -> list[str]:
+    lowered = {str(key).strip().lower(): value for key, value in row.items() if key is not None}
+    goalkeeper = [
+        rating_number(first(row, name))
+        for name in ("gk_diving", "goalkeeping_diving", "gk_handling", "goalkeeping_handling",
+                     "gk_positioning", "goalkeeping_positioning", "gk_reflexes", "goalkeeping_reflexes")
+    ]
+    goalkeeper = [value for value in goalkeeper if value is not None]
+    scored: list[tuple[float, str]] = []
+    for position, columns in POSITION_RATING_COLUMNS.items():
+        ratings = [rating_number(lowered.get(column)) for column in columns]
+        ratings = [value for value in ratings if value is not None]
+        if ratings:
+            scored.append((max(ratings), position))
+    if goalkeeper and sum(goalkeeper) / len(goalkeeper) >= 45 and (not scored or max(scored)[0] < 50):
+        return ["GK"]
+    if scored:
+        scored.sort(reverse=True)
+        best = scored[0][0]
+        return [position for score, position in scored if score >= best - 4][:4]
+
+    if goalkeeper and sum(goalkeeper) / len(goalkeeper) >= 45:
+        return ["GK"]
+
+    defense = [rating_number(first(row, name)) for name in
+               ("marking", "defending_marking_awareness", "stand_tackle", "defending_standing_tackle",
+                "slide_tackle", "defending_sliding_tackle", "interceptions")]
+    midfield = [rating_number(first(row, name)) for name in
+                ("short_pass", "attacking_short_passing", "long_pass", "skill_long_passing", "vision", "ball_control")]
+    attack = [rating_number(first(row, name)) for name in
+              ("finishing", "attacking_finishing", "att_position", "mentality_positioning", "dribbling")]
+    averages = {
+        "CB": sum(x for x in defense if x is not None) / max(1, sum(x is not None for x in defense)),
+        "CM": sum(x for x in midfield if x is not None) / max(1, sum(x is not None for x in midfield)),
+        "ST": sum(x for x in attack if x is not None) / max(1, sum(x is not None for x in attack)),
+    }
+    return [max(averages, key=averages.get)]
 
 
 def money_millions(value):
@@ -183,24 +270,29 @@ def normalize_player(row: dict[str, str], start_year: int, source: str):
     if age is None:
         age = 24
 
-    raw_position = first(
-        row,
-        "player_positions",
-        "preferred_positions",
-        "positions",
-        "club_position",
-        "position",
-        "preferredposition1",
+    positions = parse_positions(
+        first(row, "player_positions"),
+        first(row, "preferred_positions"),
+        first(row, "positions"),
+        first(row, "preferredposition1"),
+        first(row, "preferredposition2"),
+        first(row, "preferredposition3"),
+        first(row, "preferredposition4"),
+        first(row, "club_position"),
+        first(row, "position"),
     )
+    if not positions:
+        positions = infer_positions(row)
     jersey = number(first(row, "club_jersey_number", "jersey_number", "number", "club_kit_number"))
     value = money_millions(first(row, "value_eur", "value", "market_value", "marketvalue"))
     loan_from = first(row, "club_loaned_from", "loaned_from", "loan_from")
-    club_position = first(row, "club_position").upper()
-    role = "后备／青年" if club_position in {"RES", "U21", "U19"} else "一线队"
+    club_position = re.sub(r"<[^>]*>", " ", first(row, "club_position")).upper().strip()
+    role = "后备／青年" if club_position in {"SUB", "RES", "U23", "U21", "U19"} else "一线队"
 
     player = {
         "name": name,
-        "sourcePos": raw_position or "CM",
+        "sourcePos": "/".join(positions[:4]),
+        "positions": positions[:4],
         "age": max(15, min(45, int(round(age)))),
         "overall": max(40, min(99, int(round(overall)))),
         "potential": max(40, min(99, int(round(potential)))),
@@ -213,6 +305,12 @@ def normalize_player(row: dict[str, str], start_year: int, source: str):
         player["marketValue"] = value
     if loan_from:
         player["loanFrom"] = loan_from
+    stamina = rating_number(first(row, "stamina", "power_stamina"))
+    if stamina is not None:
+        player["stamina"] = max(1, min(99, int(round(stamina))))
+    preferred_foot = first(row, "preferred_foot", "preferredfoot")
+    if preferred_foot:
+        player["preferredFoot"] = preferred_foot
     player_id = first(row, "sofifa_id", "player_id", "playerid", "id")
     return club, player_id, player
 
