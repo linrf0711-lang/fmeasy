@@ -16,7 +16,37 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "data" / "squads"
 
+HISTORICAL_URL = "https://raw.githubusercontent.com/lbenz730/fifa_model/master/player_stats.csv"
+
 SOURCES = {
+    **{
+        year: {
+            "url": HISTORICAL_URL,
+            "label": f"Kaggle · FIFA {year + 1} Complete Player Dataset",
+            "filter_year": year + 1,
+        }
+        for year in range(2004, 2016)
+    },
+    2016: {
+        "url": "https://raw.githubusercontent.com/sumairrathore/Project_4/main/data/raw_data/players_17.csv",
+        "label": "Kaggle · FIFA 17 Complete Player Dataset",
+    },
+    2017: {
+        "url": "https://raw.githubusercontent.com/sumairrathore/Project_4/main/data/raw_data/players_18.csv",
+        "label": "Kaggle · FIFA 18 Complete Player Dataset",
+    },
+    2018: {
+        "url": "https://raw.githubusercontent.com/sumairrathore/Project_4/main/data/raw_data/players_19.csv",
+        "label": "Kaggle · FIFA 19 Complete Player Dataset",
+    },
+    2019: {
+        "url": "https://raw.githubusercontent.com/sumairrathore/Project_4/main/data/raw_data/players_20.csv",
+        "label": "Kaggle · FIFA 20 Complete Player Dataset",
+    },
+    2020: {
+        "url": "https://raw.githubusercontent.com/sumairrathore/Project_4/main/data/raw_data/players_21.csv",
+        "label": "Kaggle · FIFA 21 Complete Player Dataset",
+    },
     2004: {
         "url": "https://raw.githubusercontent.com/lbenz730/fifa_model/master/player_stats.csv",
         "label": "FIFA Index · FIFA 05 历史数据",
@@ -44,6 +74,8 @@ SOURCES = {
     },
 }
 
+TEXT_CACHE: dict[str, str] = {}
+
 TOP_LEAGUE_PATTERNS = (
     "premier league",
     "england first division",
@@ -69,10 +101,13 @@ SECOND_TIER_PATTERNS = (
 
 
 def fetch_text(url: str) -> str:
+    if url in TEXT_CACHE:
+        return TEXT_CACHE[url]
     request = urllib.request.Request(url, headers={"User-Agent": "FMEASY-squad-builder/1.0"})
     with urllib.request.urlopen(request, timeout=120) as response:
         raw = response.read()
-    return raw.decode("utf-8-sig", errors="replace")
+    TEXT_CACHE[url] = raw.decode("utf-8-sig", errors="replace")
+    return TEXT_CACHE[url]
 
 
 def clean(value) -> str:
