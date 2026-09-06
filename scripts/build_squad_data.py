@@ -300,6 +300,27 @@ def identity_key(value: str) -> str:
     return CLUB_ALIASES.get(value, value)
 
 
+def person_name_key(value: str) -> str:
+    value = unicodedata.normalize("NFKD", clean(value)).encode("ascii", "ignore").decode().lower()
+    return re.sub(r"[^a-z0-9]+", " ", value).strip()
+
+
+def person_dedupe_keys(player: dict) -> set[str]:
+    names = {
+        person_name_key(player.get("name", "")),
+        person_name_key(player.get("fullName", "")),
+    } - {""}
+    birth = clean(player.get("dateOfBirth"))
+    keys = {f"name:{name}" for name in names}
+    if birth:
+        keys.update(f"dob-name:{birth}:{name}" for name in names)
+        keys.update(f"dob-last:{birth}:{name.split()[-1]}" for name in names if name.split())
+    fifa_id = clean(player.get("fifaId"))
+    if fifa_id:
+        keys.add(f"fifa:{fifa_id}")
+    return keys
+
+
 def stable_id(prefix: str, *parts: str) -> str:
     digest = hashlib.sha1("|".join(identity_key(part) for part in parts).encode()).hexdigest()[:16]
     return f"{prefix}-{digest}"
@@ -630,13 +651,20 @@ def supplement_real_rotation_players(
     current = packed.setdefault(target, [])
     known_ids = {p.get("canonicalPlayerId") for p in current}
     known_names = {identity_key(p.get("name", "")) for p in current}
+    known_people = set().union(*(person_dedupe_keys(p) for p in current)) if current else set()
     added = 0
     for player in squad:
-        if player["canonicalPlayerId"] in known_ids or identity_key(player["name"]) in known_names:
+        player_keys = person_dedupe_keys(player)
+        if (
+            player["canonicalPlayerId"] in known_ids
+            or identity_key(player["name"]) in known_names
+            or bool(player_keys & known_people)
+        ):
             continue
         current.append(player)
         known_ids.add(player["canonicalPlayerId"])
         known_names.add(identity_key(player["name"]))
+        known_people.update(player_keys)
         added += 1
     return target, added
 
@@ -781,7 +809,11 @@ def build_one(start_year: int, config: dict):
         for source_name in season_teams:
             data_name, method = match_club(source_name, packed)
             supplemented = 0
-            if not data_name or len(packed.get(data_name, [])) < 18:
+            # Before FIFA 16, public game exports often omit reserves and players
+            # without a rating row. Merge the complete same-season registration
+            # list even when the rating roster already has 18 players.
+            needs_registration_merge = start_year <= 2014
+            if not data_name or len(packed.get(data_name, [])) < 18 or needs_registration_merge:
                 data_name, supplemented = supplement_real_rotation_players(
                     start_year, spec, source_name, data_name, packed
                 )
