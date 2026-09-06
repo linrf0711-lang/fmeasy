@@ -1,1 +1,11 @@
-# fmeasy
+# FMEASY
+
+轻量级足球经理生涯模拟器。
+
+## 阵容数据
+
+- `data/squads/2004.json.gz`–`2025.json.gz` 对应 2004/05–2025/26 赛季。
+- 球员评分、注册位置和可踢位置来自逐代 FIFA / EA FC 的 Kaggle 数据镜像；历史轮换名单使用 FootballSquads 的同赛季注册名单补齐。
+- 2026/27 选择项明确使用 FC 26 最新可核验基线，不会把它伪装成尚未发布的 FC 27 数据。
+- `scripts/build_squad_data.py` 会拒绝假名、缺队、少于 18 名真实球员的五大联赛阵容、门将/非门将冲突和损坏的位置字段。
+- GitHub Actions 会重建全部赛季文件、验证每个 gzip 和 JSON，再发布生成结果。

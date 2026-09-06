@@ -20,14 +20,16 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "data" / "squads"
 
-HISTORICAL_URL = "https://raw.githubusercontent.com/lbenz730/fifa_model/master/player_stats.csv"
+HISTORICAL_URL = (
+    "https://raw.githubusercontent.com/lbenz730/fifa_model/master/"
+    "stats/player_stats_{edition}.csv"
+)
 
 SOURCES = {
     **{
         year: {
-            "url": HISTORICAL_URL,
+            "url": HISTORICAL_URL.format(edition=year + 1),
             "label": f"Kaggle · FIFA {year + 1} Complete Player Dataset",
-            "filter_year": year + 1,
         }
         for year in range(2004, 2016)
     },
@@ -52,9 +54,8 @@ SOURCES = {
         "label": "Kaggle · FIFA 21 Complete Player Dataset",
     },
     2004: {
-        "url": "https://raw.githubusercontent.com/lbenz730/fifa_model/master/player_stats.csv",
+        "url": HISTORICAL_URL.format(edition=2005),
         "label": "FIFA Index · FIFA 05 历史数据",
-        "filter_year": 2005,
     },
     2021: {
         "url": "https://raw.githubusercontent.com/abineshta/FIFA-22-complete-player-dataset-EDA/main/players_22.csv",
@@ -115,6 +116,29 @@ POSITION_ALIASES = {
     "LM": "LM", "LWM": "LW", "RM": "RM", "RWM": "RW",
     "LW": "LW", "LF": "LW", "RW": "RW", "RF": "RW",
     "CF": "CF", "ST": "ST", "LS": "ST", "RS": "ST",
+}
+
+POSITION_TEXT_ALIASES = {
+    "GOALKEEPER": "GK",
+    "KEEPER": "GK",
+    "CENTRE BACK": "CB",
+    "CENTER BACK": "CB",
+    "CENTRE-BACK": "CB",
+    "CENTER-BACK": "CB",
+    "LEFT BACK": "LB",
+    "RIGHT BACK": "RB",
+    "LEFT WING BACK": "LWB",
+    "RIGHT WING BACK": "RWB",
+    "DEFENSIVE MIDFIELD": "DM",
+    "CENTRAL MIDFIELD": "CM",
+    "ATTACKING MIDFIELD": "AM",
+    "LEFT MIDFIELD": "LM",
+    "RIGHT MIDFIELD": "RM",
+    "LEFT WINGER": "LW",
+    "RIGHT WINGER": "RW",
+    "CENTRE FORWARD": "CF",
+    "CENTER FORWARD": "CF",
+    "STRIKER": "ST",
 }
 
 POSITION_RATING_COLUMNS = {
@@ -267,6 +291,17 @@ VERIFIED_POSITION_OVERRIDES = {
     ("mathieumoreau", "1983"): ["GK"],
 }
 
+# Stable FIFA/SoFIFA ids used as regression guards for the most damaging class
+# of import error: swapping a goalkeeper and an outfield player.
+GOALKEEPER_GUARDS = {
+    "1179": True,      # Gianluigi Buffon
+    "167495": True,    # Manuel Neuer
+    "193080": True,    # David de Gea
+    "20801": False,    # Cristiano Ronaldo
+    "158023": False,   # Lionel Messi
+    "209331": False,   # Mohamed Salah
+}
+
 
 def fetch_text(url: str) -> str:
     if url in TEXT_CACHE:
@@ -364,6 +399,9 @@ def parse_positions(*values) -> list[str]:
     positions: list[str] = []
     for value in values:
         text = re.sub(r"<[^>]*>", " ", clean(value)).upper()
+        for label, position in sorted(POSITION_TEXT_ALIASES.items(), key=lambda item: -len(item[0])):
+            if re.search(rf"(?<![A-Z]){re.escape(label)}(?![A-Z])", text) and position not in positions:
+                positions.append(position)
         for token in re.findall(r"[A-Z]{1,5}", text):
             position = POSITION_ALIASES.get(token)
             if position and position not in positions:
@@ -372,7 +410,7 @@ def parse_positions(*values) -> list[str]:
 
 
 def source_positions(row: dict[str, str]) -> tuple[list[str], str, bool]:
-    """Return source-backed primary/playable positions without treating SUB/RES as positions."""
+    """Return one coherent source position list, without mixing conflicting columns."""
     candidates = (
         (("player_positions",), "FIFA player_positions", True),
         (("preferred_positions",), "FIFA preferred_positions", True),
@@ -382,23 +420,19 @@ def source_positions(row: dict[str, str]) -> tuple[list[str], str, bool]:
         (("position",), "FIFA registered position", True),
         (("club_position",), "FIFA club position", False),
     )
-    positions: list[str] = []
-    registered_source = ""
-    high_confidence = False
     for aliases, label, reliable_primary in candidates:
         parsed = parse_positions(first(row, *aliases))
-        if parsed and not registered_source:
-            registered_source = label
-            high_confidence = reliable_primary
-        for position in parsed:
-            if position not in positions:
-                positions.append(position)
-    # Preferred position 2-4 are separate columns in some historic exports.
-    for index in range(2, 5):
-        for position in parse_positions(first(row, f"preferredposition{index}", f"preferred_position_{index}")):
-            if position not in positions:
-                positions.append(position)
-    return positions[:4], registered_source, high_confidence
+        if not parsed:
+            continue
+        positions = parsed
+        # A few older exports store preferred positions 2-4 in separate fields.
+        if "preferred position" in label.lower():
+            for index in range(2, 5):
+                for position in parse_positions(first(row, f"preferredposition{index}", f"preferred_position_{index}")):
+                    if position not in positions:
+                        positions.append(position)
+        return positions[:4], label, reliable_primary
+    return [], "", False
 
 
 def infer_positions(row: dict[str, str]) -> list[str]:
@@ -910,8 +944,7 @@ def build_one(start_year: int, config: dict):
     target = OUT / f"{start_year}.json"
     content = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     target.write_bytes(content)
-    with gzip.open(f"{target}.gz", "wb", compresslevel=9) as archive:
-        archive.write(content)
+    Path(f"{target}.gz").write_bytes(gzip.compress(content, compresslevel=9, mtime=0))
     print(f"Wrote {target.relative_to(ROOT)}: {len(packed)} clubs / {player_count} players", flush=True)
 
 
@@ -925,7 +958,38 @@ def player_history_keys(player: dict) -> list[str]:
     full_name = clean(player.get("fullName") or player.get("name"))
     if birth and full_name:
         keys.append(f"person:{identity_key(full_name)}:{birth}")
+        if birth_year:
+            keys.append(f"person-year:{identity_key(full_name)}:{birth_year}")
     return keys
+
+
+def mean_attribute(player: dict, names: tuple[str, ...]) -> float | None:
+    attributes = player.get("fifaAttributes") or {}
+    values = [number(attributes.get(name)) for name in names]
+    values = [value for value in values if value is not None]
+    return sum(values) / len(values) if values else None
+
+
+def goalkeeper_conflict(player: dict, positions: list[str]) -> str | None:
+    """Detect impossible GK/outfield registrations using independent attribute evidence."""
+    fifa_id = clean(player.get("fifaId"))
+    expected = GOALKEEPER_GUARDS.get(fifa_id)
+    is_goalkeeper = positions[0] == "GK"
+    if expected is not None and is_goalkeeper != expected:
+        return f"guarded FIFA id {fifa_id} has {positions}"
+
+    gk = mean_attribute(player, ("gkDiving", "gkHandling", "gkKicking", "gkReflexes", "gkPositioning"))
+    outfield = mean_attribute(
+        player,
+        ("pace", "shooting", "passing", "dribbling", "defending", "physical", "ballControl", "shortPassing"),
+    )
+    if gk is None:
+        return None
+    if is_goalkeeper and gk < 35 and outfield is not None and outfield >= 50:
+        return f"GK registration conflicts with GK={gk:.1f}, outfield={outfield:.1f}"
+    if not is_goalkeeper and gk >= 55 and (outfield is None or outfield <= 45):
+        return f"outfield registration conflicts with GK={gk:.1f}, outfield={outfield}"
+    return None
 
 
 def validate_position_history() -> None:
@@ -933,6 +997,7 @@ def validate_position_history() -> None:
     payloads: dict[int, dict] = {}
     history: dict[str, list[tuple[int, list[str]]]] = defaultdict(list)
     allowed = set(POSITION_RATING_COLUMNS)
+    errors: list[str] = []
     for start_year in SOURCES:
         path = OUT / f"{start_year}.json"
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -940,15 +1005,25 @@ def validate_position_history() -> None:
         for players in payload["teams"].values():
             for player in players:
                 positions = [p for p in player.get("playablePositions", []) if p in allowed]
-                if positions and not player.get("positionEstimated"):
+                if positions and not player.get("positionEstimated") and not goalkeeper_conflict(player, positions):
                     for key in player_history_keys(player):
                         history[key].append((start_year, positions[:4]))
 
     for start_year, payload in payloads.items():
         counts = defaultdict(int)
-        for players in payload["teams"].values():
+        season_people: dict[str, str] = {}
+        for club, players in payload["teams"].items():
             for player in players:
                 counts["total"] += 1
+                if is_fake_name(player.get("name", "")):
+                    errors.append(f"{start_year}/{club}: placeholder or missing player name {player.get('name')!r}")
+                for identity in player_history_keys(player):
+                    if identity.startswith("fifa:") or identity.startswith("person:"):
+                        other_club = season_people.setdefault(identity, club)
+                        if other_club != club:
+                            errors.append(
+                                f"{start_year}: duplicate player identity {identity} in {other_club} and {club}"
+                            )
                 positions = [p for p in player.get("playablePositions", []) if p in allowed]
                 repaired = False
                 if player.get("positionEstimated"):
@@ -976,6 +1051,9 @@ def validate_position_history() -> None:
                 if "GK" in positions:
                     positions = ["GK"] if positions[0] == "GK" else [p for p in positions if p != "GK"]
                     counts["goalkeeperMixRemoved"] += 1
+                conflict = goalkeeper_conflict(player, positions)
+                if conflict:
+                    errors.append(f"{start_year}/{club}/{player.get('name')}: {conflict}")
                 player["positions"] = positions
                 player["registeredPosition"] = positions[0]
                 player["primaryPosition"] = positions[0]
@@ -990,18 +1068,35 @@ def validate_position_history() -> None:
                         counts["attributeOrCoarseEstimated"] += 1
                 else:
                     counts["directSource"] += 1
+        for league_name, league in payload.get("leagues", {}).items():
+            expected = int(league.get("clubsExpected") or 0)
+            found = int(league.get("clubsFound") or 0)
+            ready = int(league.get("clubsRotationReady") or 0)
+            if found != expected:
+                errors.append(f"{start_year}/{league_name}: matched {found}/{expected} clubs")
+            if ready != expected:
+                errors.append(f"{start_year}/{league_name}: rotation-ready {ready}/{expected} clubs")
+            for club in league.get("clubs", []):
+                if int(club.get("playersFound") or 0) < 18:
+                    errors.append(
+                        f"{start_year}/{league_name}/{club.get('sourceName')}: "
+                        f"only {club.get('playersFound', 0)} real players"
+                    )
         counts["invalid"] = 0
         payload["positionQuality"] = dict(counts)
         content = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         target = OUT / f"{start_year}.json"
         target.write_bytes(content)
-        with gzip.open(f"{target}.gz", "wb", compresslevel=9) as archive:
-            archive.write(content)
+        Path(f"{target}.gz").write_bytes(gzip.compress(content, compresslevel=9, mtime=0))
         print(
             f"Position QA {start_year}: {counts['total']} rows, {counts['directSource']} direct, "
             f"{counts['historyRepaired']} history-repaired, {counts['attributeOrCoarseEstimated']} estimated",
             flush=True,
         )
+    if errors:
+        preview = "\n".join(f"- {error}" for error in errors[:80])
+        remainder = f"\n- ... and {len(errors) - 80} more" if len(errors) > 80 else ""
+        raise RuntimeError(f"Squad/position validation failed ({len(errors)} issues):\n{preview}{remainder}")
 
 
 def main():
