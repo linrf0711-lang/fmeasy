@@ -987,7 +987,9 @@ def goalkeeper_conflict(player: dict, positions: list[str]) -> str | None:
         return None
     if is_goalkeeper and gk < 35 and outfield is not None and outfield >= 50:
         return f"GK registration conflicts with GK={gk:.1f}, outfield={outfield:.1f}"
-    if not is_goalkeeper and gk >= 55 and (outfield is None or outfield <= 45):
+    # Some old FIFA exports contain unusually high goalkeeper sub-ratings for
+    # emergency outfield keepers. Only reject a non-GK row at a decisive gap.
+    if not is_goalkeeper and gk >= 65 and (outfield is None or outfield <= 40):
         return f"outfield registration conflicts with GK={gk:.1f}, outfield={outfield}"
     return None
 
