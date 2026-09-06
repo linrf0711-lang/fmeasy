@@ -7,6 +7,7 @@ import csv
 import difflib
 import gzip
 import hashlib
+import html
 import io
 import json
 import re
@@ -344,9 +345,80 @@ def identity_key(value: str) -> str:
 
 
 def person_name_key(value: str) -> str:
-    value = clean(value).translate(str.maketrans({"ø": "o", "Ø": "O", "ł": "l", "Ł": "L", "đ": "d", "Đ": "D"}))
+    value = html.unescape(clean(value)).translate(
+        str.maketrans({"ø": "o", "Ø": "O", "ł": "l", "Ł": "L", "đ": "d", "Đ": "D"})
+    )
     value = unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode().lower()
     return re.sub(r"[^a-z0-9]+", "", value)
+
+
+def person_name_parts(value: str) -> list[str]:
+    value = html.unescape(clean(value)).translate(
+        str.maketrans({"ø": "o", "Ø": "O", "ł": "l", "Ł": "L", "đ": "d", "Đ": "D"})
+    )
+    value = unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode().lower()
+    return re.findall(r"[a-z0-9]+", value)
+
+
+def person_name_tokens(value: str) -> set[str]:
+    return {token for token in person_name_parts(value) if len(token) > 1}
+
+
+def initial_name_match(first_name: str, second_name: str) -> bool:
+    """Match forms such as ``F. Torres``/``Fernando Torres`` and preserve twins."""
+    for abbreviated, expanded in ((first_name, second_name), (second_name, first_name)):
+        short_parts = person_name_parts(abbreviated)
+        long_parts = person_name_parts(expanded)
+        initials = [part for part in short_parts if len(part) == 1]
+        shared = {part for part in short_parts if len(part) > 1}
+        if (
+            initials
+            and shared
+            and shared.issubset(set(long_parts))
+            and all(any(part.startswith(initial) for part in long_parts) for initial in initials)
+        ):
+            return True
+    return False
+
+
+def same_player_alias(first_player: dict, second_player: dict) -> bool:
+    """Match a FIFA row to its registration-list alias without merging twins.
+
+    A shared birthday alone is deliberately insufficient: several real teammates
+    are twins. Alias collapsing is limited to one FIFA/EA row plus one
+    FootballSquads-only row and requires corroborating shirt-number or name data.
+    """
+    first_fifa = bool(clean(first_player.get("fifaId")))
+    second_fifa = bool(clean(second_player.get("fifaId")))
+    if first_fifa == second_fifa:
+        return False
+    birth = clean(first_player.get("dateOfBirth"))
+    if not birth or birth != clean(second_player.get("dateOfBirth")):
+        return False
+    first_number = number(first_player.get("number"))
+    second_number = number(second_player.get("number"))
+    if first_number is not None and first_number == second_number:
+        return True
+    first_name = person_name_key(first_player.get("fullName") or first_player.get("name"))
+    second_name = person_name_key(second_player.get("fullName") or second_player.get("name"))
+    if not first_name or not second_name:
+        return False
+    if min(len(first_name), len(second_name)) >= 4 and (
+        first_name in second_name or second_name in first_name
+    ):
+        return True
+    first_tokens = person_name_tokens(first_player.get("fullName") or first_player.get("name"))
+    second_tokens = person_name_tokens(second_player.get("fullName") or second_player.get("name"))
+    shorter = first_tokens if len(first_tokens) <= len(second_tokens) else second_tokens
+    longer = second_tokens if shorter is first_tokens else first_tokens
+    if len(shorter) >= 2 and shorter.issubset(longer):
+        return True
+    if initial_name_match(
+        first_player.get("fullName") or first_player.get("name"),
+        second_player.get("fullName") or second_player.get("name"),
+    ):
+        return True
+    return difflib.SequenceMatcher(None, first_name, second_name).ratio() >= 0.70
 
 
 def person_dedupe_keys(player: dict) -> set[str]:
@@ -690,44 +762,48 @@ def parse_football_squads(text: str, start_year: int, club: str, country: str) -
 def supplement_real_rotation_players(
     start_year: int, spec: dict, source_name: str, data_name: str | None,
     packed: dict[str, list[dict]],
-) -> tuple[str | None, int]:
+) -> tuple[str | None, int, int]:
     if start_year > 2023:
-        return data_name, 0
+        return data_name, 0, 0
     base, index = football_squads_index(start_year, spec)
     if not index:
-        return data_name, 0
+        return data_name, 0, 0
     index_as_teams = {name: [{}] for name in index}
     squad_name, _ = match_club(source_name, index_as_teams)
     if not squad_name:
-        return data_name, 0
+        return data_name, 0, 0
     try:
         squad = parse_football_squads(
             fetch_text(f"{base}/{index[squad_name]}"), start_year, squad_name, spec["country"]
         )
     except Exception:
-        return data_name, 0
+        return data_name, 0, 0
     if not squad:
-        return data_name, 0
+        return data_name, 0, 0
     target = data_name or squad_name
     current = packed.setdefault(target, [])
     known_ids = {p.get("canonicalPlayerId") for p in current}
     known_names = {identity_key(p.get("name", "")) for p in current}
     known_people = set().union(*(person_dedupe_keys(p) for p in current)) if current else set()
     added = 0
+    duplicates_removed = 0
     for player in squad:
         player_keys = person_dedupe_keys(player)
-        if (
+        duplicate = (
             player["canonicalPlayerId"] in known_ids
             or identity_key(player["name"]) in known_names
             or bool(player_keys & known_people)
-        ):
+            or any(same_player_alias(player, existing) for existing in current)
+        )
+        if duplicate:
+            duplicates_removed += 1
             continue
         current.append(player)
         known_ids.add(player["canonicalPlayerId"])
         known_names.add(identity_key(player["name"]))
         known_people.update(player_keys)
         added += 1
-    return target, added
+    return target, added, duplicates_removed
 
 
 def normalize_player(row: dict[str, str], start_year: int, source: str):
@@ -872,6 +948,7 @@ def build_one(start_year: int, config: dict):
     leagues = {}
     club_countries: dict[str, str] = {}
     premier_data_clubs: set[str] = set()
+    alias_duplicates_removed = 0
     for league_name, spec in LEAGUE_SPECS.items():
         season_teams, season_team_source = fetch_league_teams(start_year, spec["slug"])
         club_matches = []
@@ -879,14 +956,16 @@ def build_one(start_year: int, config: dict):
         for source_name in season_teams:
             data_name, method = match_club(source_name, packed)
             supplemented = 0
+            deduplicated = 0
             # Before FIFA 16, public game exports often omit reserves and players
             # without a rating row. Merge the complete same-season registration
             # list even when the rating roster already has 18 players.
             needs_registration_merge = start_year <= 2014
             if not data_name or len(packed.get(data_name, [])) < 18 or needs_registration_merge:
-                data_name, supplemented = supplement_real_rotation_players(
+                data_name, supplemented, deduplicated = supplement_real_rotation_players(
                     start_year, spec, source_name, data_name, packed
                 )
+                alias_duplicates_removed += deduplicated
                 if supplemented:
                     method = f"{method}+football-squads"
             if data_name:
@@ -900,6 +979,7 @@ def build_one(start_year: int, config: dict):
                 "playersFound": len(packed.get(data_name, [])) if data_name else 0,
                 "rotationReady": len(packed.get(data_name, [])) >= 18 if data_name else False,
                 "supplementedRealPlayers": supplemented,
+                "duplicateAliasesRemoved": deduplicated,
             })
         if league_name == "Premier League":
             premier_data_clubs = matched_clubs
@@ -943,6 +1023,11 @@ def build_one(start_year: int, config: dict):
         "exact": True,
         "clubCount": len(packed),
         "playerCount": player_count,
+        "identityQuality": {
+            "duplicateAliasesRemoved": alias_duplicates_removed,
+            "remainingProbableDuplicates": 0,
+            "method": "FIFA ID plus birth date, shirt number and normalized name alias checks",
+        },
         "leagues": leagues,
         "teams": packed,
     }
@@ -1020,6 +1105,39 @@ def validate_position_history() -> None:
     for start_year, payload in payloads.items():
         counts = defaultdict(int)
         for club, players in payload["teams"].items():
+            seen_canonical: set[str] = set()
+            seen_fifa: set[str] = set()
+            seen_birth_names: set[tuple[str, str]] = set()
+            for index, player in enumerate(players):
+                canonical_id = clean(player.get("canonicalPlayerId"))
+                fifa_id = clean(player.get("fifaId"))
+                birth = clean(player.get("dateOfBirth"))
+                name_key = person_name_key(player.get("fullName") or player.get("name"))
+                birth_name = (birth, name_key)
+                if canonical_id and canonical_id in seen_canonical:
+                    errors.append(f"{start_year}/{club}: duplicate canonical player {canonical_id}")
+                    counts["remainingProbableDuplicates"] += 1
+                if fifa_id and fifa_id in seen_fifa:
+                    errors.append(f"{start_year}/{club}: duplicate FIFA player id {fifa_id}")
+                    counts["remainingProbableDuplicates"] += 1
+                if birth and name_key and birth_name in seen_birth_names:
+                    errors.append(
+                        f"{start_year}/{club}: duplicate birth/name identity {player.get('name')} ({birth})"
+                    )
+                    counts["remainingProbableDuplicates"] += 1
+                for existing in players[:index]:
+                    if same_player_alias(player, existing):
+                        errors.append(
+                            f"{start_year}/{club}: probable duplicate aliases "
+                            f"{existing.get('name')} / {player.get('name')} ({birth})"
+                        )
+                        counts["remainingProbableDuplicates"] += 1
+                if canonical_id:
+                    seen_canonical.add(canonical_id)
+                if fifa_id:
+                    seen_fifa.add(fifa_id)
+                if birth and name_key:
+                    seen_birth_names.add(birth_name)
             for player in players:
                 counts["total"] += 1
                 if is_fake_name(player.get("name", "")):
@@ -1084,6 +1202,9 @@ def validate_position_history() -> None:
                     )
         counts["invalid"] = 0
         payload["positionQuality"] = dict(counts)
+        payload.setdefault("identityQuality", {})["remainingProbableDuplicates"] = counts[
+            "remainingProbableDuplicates"
+        ]
         content = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         target = OUT / f"{start_year}.json"
         target.write_bytes(content)
