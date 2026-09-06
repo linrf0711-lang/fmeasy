@@ -479,19 +479,31 @@ def football_squads_index(start_year: int, spec: dict) -> tuple[str, dict[str, s
 def parse_football_squads(text: str, start_year: int, club: str, country: str) -> list[dict]:
     players = []
     reader = csv.reader(io.StringIO(text))
+    columns = None
     for row in reader:
-        if not row or row[0].lstrip().startswith("=") or len(row) < 7:
-            if row and clean(row[0]).lower().startswith("== past players"):
-                break
+        if not row:
             continue
-        name = clean_player_name(row[1] if len(row) > 1 else "")
+        if clean(row[0]).lower().startswith("== past players"):
+            break
+        lowered = [clean(value).lower() for value in row]
+        if "name" in lowered and "pos" in lowered:
+            columns = {name: index for index, name in enumerate(lowered)}
+            continue
+        if row[0].lstrip().startswith("=") or not columns:
+            continue
+        name_index = columns.get("name")
+        position_index = columns.get("pos")
+        birth_index = columns.get("date of birth")
+        if name_index is None or position_index is None or name_index >= len(row) or position_index >= len(row):
+            continue
+        name = clean_player_name(row[name_index])
         if is_fake_name(name) or name.lower() == "name":
             continue
-        source_position = clean(row[3]).upper()
+        source_position = clean(row[position_index]).upper()
         position = {"G": "GK", "D": "CB", "M": "CM", "F": "ST"}.get(source_position)
         if not position:
             continue
-        birth_raw = clean(row[6])
+        birth_raw = clean(row[birth_index]) if birth_index is not None and birth_index < len(row) else ""
         birth_match = re.search(r"(\d{1,2})-(\d{1,2})-(\d{2,4})", birth_raw)
         birth = None
         age = None
@@ -503,8 +515,12 @@ def parse_football_squads(text: str, start_year: int, club: str, country: str) -
                     year -= 100
             birth = f"{year:04d}-{month:02d}-{day:02d}"
             age = max(15, min(45, start_year - year))
-        nationality = clean(row[2]) or None
-        number_value = number(row[0])
+        nationality_index = columns.get("nat")
+        nationality = clean(row[nationality_index]) if nationality_index is not None and nationality_index < len(row) else None
+        number_index = columns.get("number", 0)
+        number_value = number(row[number_index]) if number_index < len(row) else None
+        height_index = columns.get("height")
+        height_raw = row[height_index] if height_index is not None and height_index < len(row) else ""
         player = {
             "canonicalPlayerId": stable_id("player", name, birth or "", nationality or "", position),
             "fifaId": None,
@@ -538,7 +554,7 @@ def parse_football_squads(text: str, start_year: int, club: str, country: str) -
             "pesPlayablePositions": [],
             "canonicalClubId": stable_id("club", club, country),
         }
-        height = number(row[4])
+        height = number(height_raw)
         if height:
             player["heightCm"] = int(round(height * 100 if height < 3 else height))
         if number_value is not None and 0 < number_value < 100:
