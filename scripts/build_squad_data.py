@@ -260,6 +260,13 @@ CLUB_ALIASES = {
     "bergamo calcio": "atalanta", "latium": "lazio",
 }
 
+# Source-specific historic anomalies independently checked against player profiles.
+VERIFIED_POSITION_OVERRIDES = {
+    ("todorkyuchukov", "1978"): ["GK"],
+    ("angelov", "1978"): ["GK"],
+    ("mathieumoreau", "1983"): ["GK"],
+}
+
 
 def fetch_text(url: str) -> str:
     if url in TEXT_CACHE:
@@ -302,8 +309,9 @@ def identity_key(value: str) -> str:
 
 
 def person_name_key(value: str) -> str:
-    value = unicodedata.normalize("NFKD", clean(value)).encode("ascii", "ignore").decode().lower()
-    return re.sub(r"[^a-z0-9]+", " ", value).strip()
+    value = clean(value).translate(str.maketrans({"ø": "o", "Ø": "O", "ł": "l", "Ł": "L", "đ": "d", "Đ": "D"}))
+    value = unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode().lower()
+    return re.sub(r"[^a-z0-9]+", "", value)
 
 
 def person_dedupe_keys(player: dict) -> set[str]:
@@ -315,7 +323,6 @@ def person_dedupe_keys(player: dict) -> set[str]:
     keys = {f"name:{name}" for name in names}
     if birth:
         keys.update(f"dob-name:{birth}:{name}" for name in names)
-        keys.update(f"dob-last:{birth}:{name.split()[-1]}" for name in names if name.split())
     fifa_id = clean(player.get("fifaId"))
     if fifa_id:
         keys.add(f"fifa:{fifa_id}")
@@ -725,13 +732,21 @@ def normalize_player(row: dict[str, str], start_year: int, source: str):
 
     source_player_id = first(row, "sofifa_id", "player_id", "playerid", "id")
     full_name = clean_player_name(first(row, "long_name", "full_name", "player_name")) or name
+    birth_year_match = re.search(r"(19|20)\d{2}", birth)
+    source_identity = f"{source_player_id}-{birth_year_match.group()}" if source_player_id and birth_year_match else source_player_id
     canonical_id = (
-        f"fifa-{source_player_id}" if source_player_id
+        f"fifa-{source_identity}" if source_identity
         else stable_id(
             "player", full_name, birth,
             first(row, "nationality_name", "nationality", "country"), positions[0],
         )
     )
+    override_key = (person_name_key(full_name), birth_year_match.group() if birth_year_match else "")
+    if override_key in VERIFIED_POSITION_OVERRIDES:
+        positions = VERIFIED_POSITION_OVERRIDES[override_key]
+        position_estimated = False
+        position_source = "independent historical profile cross-check"
+        position_source_reliable = True
     attributes = {}
     for field, aliases in FIFA_ATTRIBUTE_ALIASES.items():
         value = rating_number(first(row, *aliases))
@@ -903,9 +918,10 @@ def build_one(start_year: int, config: dict):
 def player_history_keys(player: dict) -> list[str]:
     keys = []
     fifa_id = clean(player.get("fifaId"))
-    if fifa_id:
-        keys.append(f"fifa:{fifa_id}")
     birth = clean(player.get("dateOfBirth"))
+    birth_year = (re.search(r"(19|20)\d{2}", birth) or [""])[0]
+    if fifa_id:
+        keys.append(f"fifa:{fifa_id}:{birth_year}" if birth_year else f"fifa:{fifa_id}")
     full_name = clean(player.get("fullName") or player.get("name"))
     if birth and full_name:
         keys.append(f"person:{identity_key(full_name)}:{birth}")
