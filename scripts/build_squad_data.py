@@ -914,8 +914,14 @@ def build_one(start_year: int, config: dict):
             "confidence": "high" if len(matched_clubs) == len(season_teams) else "partial",
         }
 
-    # Stage one preserves complete source rows for Premier League records only.
-    # Other leagues remain compact so the existing browser loader stays fast.
+    # FMEASY exposes only these five domestic leagues. Keeping unrelated FIFA
+    # clubs made each browser payload several megabytes and was the cause of
+    # previously truncated/corrupt repository blobs. Retain every matched club
+    # and player in the playable leagues, but no unrelated competitions.
+    packed = {club: players for club, players in packed.items() if club in club_countries}
+
+    # Preserve complete source rows for Premier League records only. Other
+    # playable leagues stay compact so the browser loader remains fast.
     for club, players in packed.items():
         for player in players:
             player["canonicalClubId"] = stable_id("club", club, club_countries.get(club, ""))
