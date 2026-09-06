@@ -31,23 +31,23 @@ SOURCES = {
         for year in range(2004, 2016)
     },
     2016: {
-        "url": "https://raw.githubusercontent.com/sumairrathore/Project_4/main/data/raw_data/players_17.csv",
+        "url": "https://raw.githubusercontent.com/kushal-gopal/EA-Sports-Fifa/main/players_17.csv",
         "label": "Kaggle · FIFA 17 Complete Player Dataset",
     },
     2017: {
-        "url": "https://raw.githubusercontent.com/sumairrathore/Project_4/main/data/raw_data/players_18.csv",
+        "url": "https://raw.githubusercontent.com/kushal-gopal/EA-Sports-Fifa/main/players_18.csv",
         "label": "Kaggle · FIFA 18 Complete Player Dataset",
     },
     2018: {
-        "url": "https://raw.githubusercontent.com/sumairrathore/Project_4/main/data/raw_data/players_19.csv",
+        "url": "https://raw.githubusercontent.com/kushal-gopal/EA-Sports-Fifa/main/players_19.csv",
         "label": "Kaggle · FIFA 19 Complete Player Dataset",
     },
     2019: {
-        "url": "https://raw.githubusercontent.com/sumairrathore/Project_4/main/data/raw_data/players_20.csv",
+        "url": "https://raw.githubusercontent.com/kushal-gopal/EA-Sports-Fifa/main/players_20.csv",
         "label": "Kaggle · FIFA 20 Complete Player Dataset",
     },
     2020: {
-        "url": "https://raw.githubusercontent.com/sumairrathore/Project_4/main/data/raw_data/players_21.csv",
+        "url": "https://raw.githubusercontent.com/Mamun-04/FIFA_21_Processing/main/players_21.csv",
         "label": "Kaggle · FIFA 21 Complete Player Dataset",
     },
     2004: {
@@ -60,7 +60,7 @@ SOURCES = {
         "label": "Kaggle · FIFA 22 Complete Player Dataset",
     },
     2022: {
-        "url": "https://raw.githubusercontent.com/sumairrathore/Project_4/main/data/raw_data/players_23.csv",
+        "url": "https://raw.githubusercontent.com/AyDippy/player_positions_classification/master/data_collection/Fifa%2023%20Players%20Data.csv",
         "label": "Kaggle · FIFA 23 Complete Player Dataset",
     },
     2023: {
@@ -305,10 +305,15 @@ def stable_id(prefix: str, *parts: str) -> str:
     return f"{prefix}-{digest}"
 
 
+def field_key(value: str) -> str:
+    """Match snake_case, spaced and CamelCase dataset headers consistently."""
+    return re.sub(r"[^a-z0-9]", "", clean(value).lower())
+
+
 def first(row: dict[str, str], *names: str) -> str:
-    lowered = {str(key).strip().lower(): value for key, value in row.items() if key is not None}
+    lowered = {field_key(str(key)): value for key, value in row.items() if key is not None}
     for name in names:
-        value = lowered.get(name.lower())
+        value = lowered.get(field_key(name))
         if clean(value):
             return clean(value)
     return ""
@@ -337,8 +342,37 @@ def parse_positions(*values) -> list[str]:
     return positions
 
 
+def source_positions(row: dict[str, str]) -> tuple[list[str], str, bool]:
+    """Return source-backed primary/playable positions without treating SUB/RES as positions."""
+    candidates = (
+        (("player_positions",), "FIFA player_positions", True),
+        (("preferred_positions",), "FIFA preferred_positions", True),
+        (("positions", "alternative_positions", "alternate_positions"), "FIFA positions", True),
+        (("preferredposition1", "preferred_position_1"), "FIFA preferred position", True),
+        (("best_position", "best position"), "FIFA best_position", True),
+        (("position",), "FIFA registered position", True),
+        (("club_position",), "FIFA club position", False),
+    )
+    positions: list[str] = []
+    registered_source = ""
+    high_confidence = False
+    for aliases, label, reliable_primary in candidates:
+        parsed = parse_positions(first(row, *aliases))
+        if parsed and not registered_source:
+            registered_source = label
+            high_confidence = reliable_primary
+        for position in parsed:
+            if position not in positions:
+                positions.append(position)
+    # Preferred position 2-4 are separate columns in some historic exports.
+    for index in range(2, 5):
+        for position in parse_positions(first(row, f"preferredposition{index}", f"preferred_position_{index}")):
+            if position not in positions:
+                positions.append(position)
+    return positions[:4], registered_source, high_confidence
+
+
 def infer_positions(row: dict[str, str]) -> list[str]:
-    lowered = {str(key).strip().lower(): value for key, value in row.items() if key is not None}
     goalkeeper = [
         rating_number(first(row, name))
         for name in ("gk_diving", "goalkeeping_diving", "gk_handling", "goalkeeping_handling",
@@ -347,7 +381,7 @@ def infer_positions(row: dict[str, str]) -> list[str]:
     goalkeeper = [value for value in goalkeeper if value is not None]
     scored: list[tuple[float, str]] = []
     for position, columns in POSITION_RATING_COLUMNS.items():
-        ratings = [rating_number(lowered.get(column)) for column in columns]
+        ratings = [rating_number(first(row, column)) for column in columns]
         ratings = [value for value in ratings if value is not None]
         if ratings:
             scored.append((max(ratings), position))
@@ -506,6 +540,7 @@ def parse_football_squads(text: str, start_year: int, club: str, country: str) -
         position = {"G": "GK", "D": "CB", "M": "CM", "F": "ST"}.get(source_position)
         if not position:
             continue
+        coarse_position = source_position != "G"
         birth_raw = clean(row[birth_index]) if birth_index is not None and birth_index < len(row) else ""
         birth_match = re.search(r"(\d{1,2})-(\d{1,2})-(\d{2,4})", birth_raw)
         birth = None
@@ -525,7 +560,7 @@ def parse_football_squads(text: str, start_year: int, club: str, country: str) -
         height_index = columns.get("height")
         height_raw = row[height_index] if height_index is not None and height_index < len(row) else ""
         player = {
-            "canonicalPlayerId": stable_id("player", name, birth or "", nationality or "", position),
+            "canonicalPlayerId": stable_id("player", name, birth or "", nationality or ""),
             "fifaId": None,
             "pesId": None,
             "name": name,
@@ -538,9 +573,10 @@ def parse_football_squads(text: str, start_year: int, club: str, country: str) -
             "playablePositions": [position],
             "primaryPosition": position,
             "secondaryPositions": [],
-            "positionEstimated": True,
-            "positionEstimationMethod": "FootballSquads coarse G/D/M/F registration group",
-            "positionConfidence": "medium",
+            "positionEstimated": coarse_position,
+            "positionEstimationMethod": "FootballSquads coarse G/D/M/F registration group" if coarse_position else None,
+            "positionConfidence": "low" if coarse_position else "high",
+            "registeredPositionSource": "FootballSquads registered group",
             "age": age if age is not None else 24,
             "ageEstimated": age is None,
             "role": "一线队",
@@ -628,20 +664,11 @@ def normalize_player(row: dict[str, str], start_year: int, source: str):
     if age is None:
         age = 24
 
-    positions = parse_positions(
-        first(row, "player_positions"),
-        first(row, "preferred_positions"),
-        first(row, "positions"),
-        first(row, "preferredposition1"),
-        first(row, "preferredposition2"),
-        first(row, "preferredposition3"),
-        first(row, "preferredposition4"),
-        first(row, "club_position"),
-        first(row, "position"),
-    )
+    positions, position_source, position_source_reliable = source_positions(row)
     position_estimated = not positions
     if position_estimated:
         positions = infer_positions(row)
+        position_source = "FIFA positional ratings"
     jersey = number(first(row, "club_jersey_number", "jersey_number", "number", "club_kit_number"))
     value = money_millions(first(row, "value_eur", "value", "market_value", "marketvalue"))
     loan_from = first(row, "club_loaned_from", "loaned_from", "loan_from")
@@ -680,7 +707,8 @@ def normalize_player(row: dict[str, str], start_year: int, source: str):
         "fifaPlayablePositions": positions[:4],
         "positionEstimated": position_estimated,
         "positionEstimationMethod": "highest FIFA positional rating within four points" if position_estimated else None,
-        "positionConfidence": "medium" if position_estimated else "high",
+        "positionConfidence": "medium" if position_estimated else ("high" if position_source_reliable else "medium"),
+        "registeredPositionSource": position_source,
         "age": max(15, min(45, int(round(age)))),
         "ageEstimated": age_estimated,
         "overall": max(40, min(99, int(round(overall)))),
@@ -819,9 +847,98 @@ def build_one(start_year: int, config: dict):
     print(f"Wrote {target.relative_to(ROOT)}: {len(packed)} clubs / {player_count} players", flush=True)
 
 
+def player_history_keys(player: dict) -> list[str]:
+    keys = []
+    fifa_id = clean(player.get("fifaId"))
+    if fifa_id:
+        keys.append(f"fifa:{fifa_id}")
+    birth = clean(player.get("dateOfBirth"))
+    full_name = clean(player.get("fullName") or player.get("name"))
+    if birth and full_name:
+        keys.append(f"person:{identity_key(full_name)}:{birth}")
+    return keys
+
+
+def validate_position_history() -> None:
+    """Repair only source gaps, then enforce position invariants across every season row."""
+    payloads: dict[int, dict] = {}
+    history: dict[str, list[tuple[int, list[str]]]] = defaultdict(list)
+    allowed = set(POSITION_RATING_COLUMNS)
+    for start_year in SOURCES:
+        path = OUT / f"{start_year}.json"
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payloads[start_year] = payload
+        for players in payload["teams"].values():
+            for player in players:
+                positions = [p for p in player.get("playablePositions", []) if p in allowed]
+                if positions and not player.get("positionEstimated"):
+                    for key in player_history_keys(player):
+                        history[key].append((start_year, positions[:4]))
+
+    for start_year, payload in payloads.items():
+        counts = defaultdict(int)
+        for players in payload["teams"].values():
+            for player in players:
+                counts["total"] += 1
+                positions = [p for p in player.get("playablePositions", []) if p in allowed]
+                repaired = False
+                if player.get("positionEstimated"):
+                    candidates = []
+                    for rank, key in enumerate(player_history_keys(player)):
+                        candidates.extend((abs(year - start_year), rank, year, value) for year, value in history.get(key, []))
+                    if candidates:
+                        _, _, source_year, positions = min(candidates, key=lambda item: (item[0], item[1], item[2]))
+                        positions = positions[:4]
+                        player["positionEstimationMethod"] = f"nearest-season verified FIFA position ({source_year})"
+                        player["positionConfidence"] = "medium"
+                        player["registeredPositionSource"] = "same-player season history"
+                        counts["historyRepaired"] += 1
+                        repaired = True
+                if not positions:
+                    # The row was already attribute-inferred during normalization. This is
+                    # retained as an explicit estimate, never presented as source FIFA data.
+                    positions = [p for p in player.get("positions", []) if p in allowed][:4]
+                if not positions:
+                    raise RuntimeError(
+                        f"Missing usable position: {start_year} / {player.get('name')} / {player.get('canonicalPlayerId')}"
+                    )
+                # A goalkeeper registration cannot be mixed with outfield hot zones. This
+                # catches malformed HTML position cells and historic import collisions.
+                if "GK" in positions:
+                    positions = ["GK"] if positions[0] == "GK" else [p for p in positions if p != "GK"]
+                    counts["goalkeeperMixRemoved"] += 1
+                player["positions"] = positions
+                player["registeredPosition"] = positions[0]
+                player["primaryPosition"] = positions[0]
+                player["playablePositions"] = positions
+                player["secondaryPositions"] = positions[1:4]
+                player["fifaRegisteredPosition"] = positions[0] if player.get("fifaId") else None
+                player["fifaPlayablePositions"] = positions if player.get("fifaId") else []
+                player["sourcePos"] = "/".join(positions)
+                if player.get("positionEstimated"):
+                    counts["estimated"] += 1
+                    if not repaired:
+                        counts["attributeOrCoarseEstimated"] += 1
+                else:
+                    counts["directSource"] += 1
+        counts["invalid"] = 0
+        payload["positionQuality"] = dict(counts)
+        content = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        target = OUT / f"{start_year}.json"
+        target.write_bytes(content)
+        with gzip.open(f"{target}.gz", "wb", compresslevel=9) as archive:
+            archive.write(content)
+        print(
+            f"Position QA {start_year}: {counts['total']} rows, {counts['directSource']} direct, "
+            f"{counts['historyRepaired']} history-repaired, {counts['attributeOrCoarseEstimated']} estimated",
+            flush=True,
+        )
+
+
 def main():
     for year, config in SOURCES.items():
         build_one(year, config)
+    validate_position_history()
 
 
 if __name__ == "__main__":
