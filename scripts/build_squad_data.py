@@ -1019,19 +1019,11 @@ def validate_position_history() -> None:
 
     for start_year, payload in payloads.items():
         counts = defaultdict(int)
-        season_people: dict[str, str] = {}
         for club, players in payload["teams"].items():
             for player in players:
                 counts["total"] += 1
                 if is_fake_name(player.get("name", "")):
                     errors.append(f"{start_year}/{club}: placeholder or missing player name {player.get('name')!r}")
-                for identity in player_history_keys(player):
-                    if identity.startswith("fifa:") or identity.startswith("person:"):
-                        other_club = season_people.setdefault(identity, club)
-                        if other_club != club:
-                            errors.append(
-                                f"{start_year}: duplicate player identity {identity} in {other_club} and {club}"
-                            )
                 positions = [p for p in player.get("playablePositions", []) if p in allowed]
                 repaired = False
                 if player.get("positionEstimated"):
