@@ -164,13 +164,22 @@ FIFA_ATTRIBUTE_ALIASES = {
 FAKE_NAME_PATTERNS = (
     r"^player\s*\d+$", r"^fake(?:\s+player)?", r"^generic(?:\s+player)?",
     r"^random(?:\s+player)?", r"^unnamed(?:\s+player)?", r"^dummy(?:\s+player)?",
-    r"^unknown(?:\s+player)?", r"^newgen", r"^资料待补", r"^青训\s*\d+$",
+    r"^unknown(?:\s+player)?", r"^unidentified(?:\s+player)?", r"^not\s+named",
+    r"^(?:n/?a|none|null|tbd|-)$", r"^newgen", r"^资料待补", r"^未命名", r"^青训\s*\d+$",
 )
 
-PREMIER_LEAGUE_CSV = (
+LEAGUE_CSV = (
     "https://raw.githubusercontent.com/datasets/football-datasets/"
-    "main/datasets/premier-league/season-{short}.csv"
+    "main/datasets/{slug}/season-{short}.csv"
 )
+
+LEAGUE_SPECS = {
+    "Premier League": {"slug": "premier-league", "country": "England"},
+    "La Liga": {"slug": "la-liga", "country": "Spain"},
+    "Serie A": {"slug": "serie-a", "country": "Italy"},
+    "Bundesliga": {"slug": "bundesliga", "country": "Germany"},
+    "Ligue 1": {"slug": "ligue-1", "country": "France"},
+}
 
 CLUB_ALIASES = {
     "man united": "manchester united", "man city": "manchester city",
@@ -329,9 +338,10 @@ def row_matches_edition(row: dict[str, str], edition: int) -> bool:
     return (year is not None and int(year) == edition) or season == str(edition)[-2:].lstrip("0")
 
 
-def fetch_premier_league_teams(start_year: int) -> list[str]:
+def fetch_league_teams(start_year: int, slug: str) -> tuple[list[str], str]:
     short = f"{start_year % 100:02d}{(start_year + 1) % 100:02d}"
-    text = fetch_text(PREMIER_LEAGUE_CSV.format(short=short))
+    url = LEAGUE_CSV.format(slug=slug, short=short)
+    text = fetch_text(url)
     reader = csv.DictReader(io.StringIO(text))
     teams: list[str] = []
     for row in reader:
@@ -339,9 +349,9 @@ def fetch_premier_league_teams(start_year: int) -> list[str]:
             name = clean(row.get(field))
             if name and name not in teams:
                 teams.append(name)
-    if len(teams) != 20:
-        raise RuntimeError(f"Premier League {start_year} team-list check failed: {len(teams)}")
-    return teams
+    if len(teams) < 16 or len(teams) > 22:
+        raise RuntimeError(f"{slug} {start_year} team-list check failed: {len(teams)}")
+    return teams, url
 
 
 def match_club(source_name: str, available: list[str]):
@@ -403,7 +413,13 @@ def normalize_player(row: dict[str, str], start_year: int, source: str):
 
     source_player_id = first(row, "sofifa_id", "player_id", "playerid", "id")
     full_name = clean_player_name(first(row, "long_name", "full_name", "player_name")) or name
-    canonical_id = f"fifa-{source_player_id}" if source_player_id else stable_id("player", full_name, birth)
+    canonical_id = (
+        f"fifa-{source_player_id}" if source_player_id
+        else stable_id(
+            "player", full_name, birth,
+            first(row, "nationality_name", "nationality", "country"), positions[0],
+        )
+    )
     attributes = {}
     for field, aliases in FIFA_ATTRIBUTE_ALIASES.items():
         value = rating_number(first(row, *aliases))
@@ -490,26 +506,44 @@ def build_one(start_year: int, config: dict):
         for club, players in sorted(teams.items())
         if len(players) >= 8
     }
-    official_teams = fetch_premier_league_teams(start_year)
-    club_matches = []
+    leagues = {}
+    club_countries: dict[str, str] = {}
     premier_data_clubs: set[str] = set()
-    for official_name in official_teams:
-        data_name, method = match_club(official_name, list(packed))
-        if data_name:
-            premier_data_clubs.add(data_name)
-        club_matches.append({
-            "officialName": official_name,
-            "dataName": data_name,
-            "canonicalClubId": stable_id("club", official_name, "England"),
-            "matchMethod": method,
-            "playersFound": len(packed.get(data_name, [])) if data_name else 0,
-        })
+    for league_name, spec in LEAGUE_SPECS.items():
+        season_teams, season_team_source = fetch_league_teams(start_year, spec["slug"])
+        club_matches = []
+        matched_clubs: set[str] = set()
+        for source_name in season_teams:
+            data_name, method = match_club(source_name, list(packed))
+            if data_name:
+                matched_clubs.add(data_name)
+                club_countries[data_name] = spec["country"]
+            club_matches.append({
+                "sourceName": source_name,
+                "dataName": data_name,
+                "canonicalClubId": stable_id("club", source_name, spec["country"]),
+                "matchMethod": method,
+                "playersFound": len(packed.get(data_name, [])) if data_name else 0,
+                "rotationReady": len(packed.get(data_name, [])) >= 18 if data_name else False,
+            })
+        if league_name == "Premier League":
+            premier_data_clubs = matched_clubs
+        leagues[league_name] = {
+            "country": spec["country"],
+            "seasonTeamSource": season_team_source,
+            "clubsExpected": len(season_teams),
+            "clubsFound": len(matched_clubs),
+            "playersFound": sum(len(packed[name]) for name in matched_clubs),
+            "clubsRotationReady": sum(len(packed[name]) >= 18 for name in matched_clubs),
+            "clubs": club_matches,
+            "confidence": "high" if len(matched_clubs) == len(season_teams) else "partial",
+        }
 
     # Stage one preserves complete source rows for Premier League records only.
     # Other leagues remain compact so the existing browser loader stays fast.
     for club, players in packed.items():
         for player in players:
-            player["canonicalClubId"] = stable_id("club", club, "England" if club in premier_data_clubs else "")
+            player["canonicalClubId"] = stable_id("club", club, club_countries.get(club, ""))
             if club not in premier_data_clubs:
                 player.pop("rawSource", None)
 
@@ -528,19 +562,7 @@ def build_one(start_year: int, config: dict):
         "exact": True,
         "clubCount": len(packed),
         "playerCount": player_count,
-        "leagues": {
-            "Premier League": {
-                "country": "England",
-                "officialTeamSource": PREMIER_LEAGUE_CSV.format(
-                    short=f"{start_year % 100:02d}{(start_year + 1) % 100:02d}"
-                ),
-                "clubsExpected": 20,
-                "clubsFound": len(premier_data_clubs),
-                "playersFound": sum(len(packed[name]) for name in premier_data_clubs),
-                "clubs": club_matches,
-                "confidence": "high" if len(premier_data_clubs) == 20 else "partial",
-            }
-        },
+        "leagues": leagues,
         "teams": packed,
     }
     OUT.mkdir(parents=True, exist_ok=True)
