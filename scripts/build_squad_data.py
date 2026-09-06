@@ -265,7 +265,7 @@ def fetch_text(url: str) -> str:
     if url in TEXT_CACHE:
         return TEXT_CACHE[url]
     request = urllib.request.Request(url, headers={"User-Agent": "FMEASY-squad-builder/1.0"})
-    with urllib.request.urlopen(request, timeout=120) as response:
+    with urllib.request.urlopen(request, timeout=35) as response:
         raw = response.read()
     TEXT_CACHE[url] = raw.decode("utf-8-sig", errors="replace")
     return TEXT_CACHE[url]
