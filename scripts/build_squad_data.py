@@ -13,6 +13,7 @@ import re
 import unicodedata
 import urllib.request
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 
@@ -534,6 +535,25 @@ def football_squads_index(start_year: int, spec: dict) -> tuple[str, dict[str, s
     }
 
 
+def warm_historical_registration_cache(start_year: int) -> None:
+    """Fetch pre-2015 registration files concurrently; parsing remains deterministic."""
+    if start_year > 2014:
+        return
+    urls = []
+    for spec in LEAGUE_SPECS.values():
+        base, index = football_squads_index(start_year, spec)
+        urls.extend(f"{base}/{path}" for path in index.values())
+
+    def warm(url: str) -> None:
+        try:
+            fetch_text(url)
+        except Exception:
+            pass
+
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        list(pool.map(warm, urls))
+
+
 def parse_football_squads(text: str, start_year: int, club: str, country: str) -> list[dict]:
     players = []
     reader = csv.reader(io.StringIO(text))
@@ -799,6 +819,7 @@ def build_one(start_year: int, config: dict):
         for club, players in sorted(teams.items())
         if len(players) >= 8
     }
+    warm_historical_registration_cache(start_year)
     leagues = {}
     club_countries: dict[str, str] = {}
     premier_data_clubs: set[str] = set()
