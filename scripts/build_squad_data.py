@@ -174,12 +174,17 @@ LEAGUE_CSV = (
 )
 
 LEAGUE_SPECS = {
-    "Premier League": {"slug": "premier-league", "country": "England"},
-    "La Liga": {"slug": "la-liga", "country": "Spain"},
-    "Serie A": {"slug": "serie-a", "country": "Italy"},
-    "Bundesliga": {"slug": "bundesliga", "country": "Germany"},
-    "Ligue 1": {"slug": "ligue-1", "country": "France"},
+    "Premier League": {"slug": "premier-league", "country": "England", "squadRoot": "eng", "squadLeague": "engprem"},
+    "La Liga": {"slug": "la-liga", "country": "Spain", "squadRoot": "spain", "squadLeague": "laliga"},
+    "Serie A": {"slug": "serie-a", "country": "Italy", "squadRoot": "italy", "squadLeague": "seriea"},
+    "Bundesliga": {"slug": "bundesliga", "country": "Germany", "squadRoot": "ger", "squadLeague": "bundes"},
+    "Ligue 1": {"slug": "ligue-1", "country": "France", "squadRoot": "france", "squadLeague": "ligue1"},
 }
+
+FOOTBALL_SQUADS_BASE = (
+    "https://raw.githubusercontent.com/footballcsv/cache.footballsquads/master/"
+    "{root}/{start}-{end}/{league}"
+)
 
 CLUB_ALIASES = {
     "man united": "manchester united", "man city": "manchester city",
@@ -195,6 +200,60 @@ CLUB_ALIASES = {
     "birmingham": "birmingham city", "wigan": "wigan athletic", "blackburn": "blackburn rovers",
     "derby": "derby county",
     "bolton": "bolton wanderers", "charlton": "charlton athletic", "sheffield utd": "sheffield united",
+    # La Liga names used by the public season files.
+    "ath madrid": "atletico madrid", "ath bilbao": "athletic de bilbao",
+    "club atletico de madrid": "atletico madrid", "atletico de madrid": "atletico madrid",
+    "espanol": "rcd espanyol", "la coruna": "rc deportivo la coruna",
+    "rcd espanyol de barcelona": "rcd espanyol", "rc deportivo de la coruna": "rc deportivo la coruna",
+    "betis": "real betis", "mallorca": "rcd mallorca", "santander": "racing santander",
+    "real betis balompie": "real betis", "real club deportivo mallorca": "rcd mallorca",
+    "sociedad": "real sociedad", "zaragoza": "real zaragoza", "alaves": "deportivo alaves",
+    "real sociedad de futbol": "real sociedad", "celta": "rc celta",
+    "real club celta de vigo": "rc celta", "rc celta vigo": "rc celta",
+    "gimnastic": "tarragona", "club gimnastic": "tarragona",
+    "gimnastic de tarragona": "tarragona", "recreativo": "rc recreativo",
+    "sp gijon": "sporting gijon", "vallecano": "rayo vallecano", "huesca": "sd huesca",
+    "rayo vallecano de madrid": "rayo vallecano", "real madrid club de futbol": "real madrid",
+    "sevilla futbol club": "sevilla", "valencia club de futbol": "valencia",
+    "oviedo": "real oviedo", "murcia": "real murcia",
+    # Serie A names used by the public season files.
+    "inter": "inter milan", "roma": "as roma", "chievо": "chievo verona",
+    "chievo": "chievo verona", "fiorentina": "acf fiorentina",
+    "sampdoria": "doria", "uc sampdoria": "doria", "fiorentina": "firenze",
+    "acf fiorentina": "firenze", "genoa": "genova", "f genova": "genova",
+    "verona": "hellas verona",
+    "sassuolo": "us sassuolo calcio", "salernitana": "us salernitana 1919",
+    # Bundesliga names used by the public season files.
+    "dortmund": "borussia dortmund", "wolfsburg": "vfl wolfsburg",
+    "hamburg": "hamburg", "hamburger sv": "hamburg", "hamburg sv": "hamburg",
+    "hamburger sport verein": "hamburg", "cologne": "koln", "1 koln": "koln",
+    "hertha": "hertha bsc", "bochum": "vfl bochum",
+    "leverkusen": "bayer leverkusen", "bielefeld": "arminia bielefeld",
+    "mgladbach": "borussia monchengladbach", "borussia m gladbach": "borussia monchengladbach",
+    "monchengladbach": "borussia monchengladbach", "stuttgart": "vfb stuttgart",
+    "duisburg": "msv duisburg", "koln": "1 koln", "ein frankfurt": "eintracht frankfurt",
+    "aachen": "alemannia aachen", "cottbus": "energie cottbus",
+    "nurnberg": "1 nurnberg", "karlsruhe": "karlsruher sc",
+    "freiburg": "sc freiburg", "hoffenheim": "tsg hoffenheim",
+    "darmstadt": "sv darmstadt 98", "paderborn": "sc paderborn 07",
+    "1 fsv mainz 05": "mainz", "mainz 05": "mainz",
+    # Ligue 1 names used by the public season files.
+    "nice": "ogc nice", "lyon": "olympique lyonnais", "ol": "olympique lyonnais",
+    "bastia": "sc bastia",
+    "caen": "sm caen", "lille": "lille osc", "paris sg": "paris saint germain",
+    "losc lille metropole": "lille osc", "lille osc metropole": "lille osc",
+    "strasbourg": "rc strasbourg", "st etienne": "as saint etienne",
+    "monaco": "as monaco", "lens": "rc lens", "nancy": "as nancy lorraine",
+    "troyes": "es troyes", "marseille": "olympique de marseille", "om": "olympique de marseille",
+    "bordeaux": "girondins bordeaux", "auxerre": "aj auxerre", "nantes": "nantes",
+    "sochaux": "sochaux", "valenciennes": "valenciennes",
+    "grenoble": "grenoble foot 38", "boulogne": "us boulogne",
+    "arles": "arles avignon", "brest": "stade brestois 29", "dijon": "dijon fco",
+    "reims": "stade de reims", "guingamp": "en avant guingamp", "rennes": "stade rennais",
+    "angers": "angers sco", "amiens": "amiens sc", "nimes": "nimes olympique",
+    "clermont": "clermont foot", "sedan": "cs sedan ardennes",
+    "ajaccio gfco": "gfc ajaccio",
+    "bergamo calcio": "atalanta", "latium": "lazio",
 }
 
 
@@ -227,8 +286,14 @@ def is_fake_name(name: str) -> bool:
 def identity_key(value: str) -> str:
     value = unicodedata.normalize("NFKD", clean(value)).encode("ascii", "ignore").decode().lower()
     value = value.replace("&", " and ").replace("'", "")
-    value = re.sub(r"\b(?:football club|fc|afc|cf|ac)\b", " ", value)
     value = re.sub(r"[^a-z0-9]+", " ", value).strip()
+    # Join punctuated initials (F.C. -> fc, R.C.D. -> rcd), then remove legal
+    # company suffixes and common club-designator phrases without touching names.
+    value = re.sub(r"\b(?:[a-z]\s+){1,4}[a-z]\b", lambda m: m.group().replace(" ", ""), value)
+    value = re.sub(r"\b(?:s\s*a\s*d|sad)\b", " ", value)
+    value = re.sub(r"\b(?:football club|futbol club|club de futbol)\b", " ", value)
+    value = re.sub(r"\b(?:fc|afc|cf|ac)\b", " ", value)
+    value = re.sub(r"\s+", " ", value).strip()
     return CLUB_ALIASES.get(value, value)
 
 
@@ -354,18 +419,171 @@ def fetch_league_teams(start_year: int, slug: str) -> tuple[list[str], str]:
     return teams, url
 
 
-def match_club(source_name: str, available: list[str]):
+def match_club(source_name: str, available: dict[str, list[dict]]):
     wanted = identity_key(source_name)
-    exact = [name for name in available if identity_key(name) == wanted]
-    if len(exact) == 1:
-        return exact[0], "normalized-exact"
+    grouped: dict[str, list[str]] = defaultdict(list)
+    for name in available:
+        grouped[identity_key(name)].append(name)
+
+    def best_variant(names: list[str]) -> str:
+        return max(
+            names,
+            key=lambda name: (
+                len(available.get(name, [])),
+                sum(p.get("overall", 0) for p in available.get(name, [])[:18]),
+                -len(name),
+            ),
+        )
+
+    if wanted in grouped:
+        return best_variant(grouped[wanted]), "normalized-exact"
+
+    generic = {
+        "real", "club", "football", "futbol", "de", "del", "la", "the",
+        "fc", "cf", "ac", "afc", "rc", "rcd", "sd", "ud", "sc", "as",
+        "us", "vfl", "vfb", "fsv", "tsg", "losc", "osc", "sm", "uc",
+        "calcio", "balompie", "metropole", "sad", "sa",
+    }
+    wanted_tokens = {token for token in wanted.split() if token not in generic and len(token) > 2}
+    contained = []
+    for key, names in grouped.items():
+        candidate_tokens = {token for token in key.split() if token not in generic and len(token) > 2}
+        if wanted_tokens and wanted_tokens <= candidate_tokens:
+            contained.extend(names)
+    if contained:
+        return best_variant(contained), "distinctive-token-match"
     ranked = sorted(
-        ((difflib.SequenceMatcher(None, wanted, identity_key(name)).ratio(), name) for name in available),
+        ((difflib.SequenceMatcher(None, wanted, key).ratio(), key) for key in grouped),
         reverse=True,
     )
     if ranked and ranked[0][0] >= .82 and (len(ranked) == 1 or ranked[0][0] - ranked[1][0] >= .08):
-        return ranked[0][1], f"unambiguous-fuzzy-{ranked[0][0]:.2f}"
+        return best_variant(grouped[ranked[0][1]]), f"unambiguous-fuzzy-{ranked[0][0]:.2f}"
     return None, "unmatched"
+
+
+def football_squads_index(start_year: int, spec: dict) -> tuple[str, dict[str, str]]:
+    base = FOOTBALL_SQUADS_BASE.format(
+        root=spec["squadRoot"], start=start_year, end=start_year + 1,
+        league=spec["squadLeague"],
+    )
+    try:
+        readme = fetch_text(f"{base}/README.md")
+    except Exception:
+        return base, {}
+    return base, {
+        clean(name): clean(path)
+        for name, path in re.findall(r"^- \[([^]]+)\]\(([^)]+\.txt)\)", readme, re.M)
+    }
+
+
+def parse_football_squads(text: str, start_year: int, club: str, country: str) -> list[dict]:
+    players = []
+    reader = csv.reader(io.StringIO(text))
+    for row in reader:
+        if not row or row[0].lstrip().startswith("=") or len(row) < 7:
+            if row and clean(row[0]).lower().startswith("== past players"):
+                break
+            continue
+        name = clean_player_name(row[1] if len(row) > 1 else "")
+        if is_fake_name(name) or name.lower() == "name":
+            continue
+        source_position = clean(row[3]).upper()
+        position = {"G": "GK", "D": "CB", "M": "CM", "F": "ST"}.get(source_position)
+        if not position:
+            continue
+        birth_raw = clean(row[6])
+        birth_match = re.search(r"(\d{1,2})-(\d{1,2})-(\d{2,4})", birth_raw)
+        birth = None
+        age = None
+        if birth_match:
+            day, month, year = map(int, birth_match.groups())
+            if year < 100:
+                year += 2000
+                if year > start_year - 15:
+                    year -= 100
+            birth = f"{year:04d}-{month:02d}-{day:02d}"
+            age = max(15, min(45, start_year - year))
+        nationality = clean(row[2]) or None
+        number_value = number(row[0])
+        player = {
+            "canonicalPlayerId": stable_id("player", name, birth or "", nationality or "", position),
+            "fifaId": None,
+            "pesId": None,
+            "name": name,
+            "fullName": name,
+            "dateOfBirth": birth,
+            "nationality": nationality,
+            "sourcePos": source_position,
+            "positions": [position],
+            "registeredPosition": position,
+            "playablePositions": [position],
+            "primaryPosition": position,
+            "secondaryPositions": [],
+            "positionEstimated": True,
+            "positionEstimationMethod": "FootballSquads coarse G/D/M/F registration group",
+            "positionConfidence": "medium",
+            "age": age if age is not None else 24,
+            "ageEstimated": age is None,
+            "role": "一线队",
+            "registrationStatus": "registered",
+            "source": "FootballSquads / footballcsv (CC0)",
+            "fifaVersion": None,
+            "fifaDataYear": None,
+            "fifaSource": None,
+            "fifaConfidence": None,
+            "fifaAttributes": {},
+            "pesVersion": None,
+            "pesOverall": None,
+            "pesRegisteredPosition": None,
+            "pesPlayablePositions": [],
+            "canonicalClubId": stable_id("club", club, country),
+        }
+        height = number(row[4])
+        if height:
+            player["heightCm"] = int(round(height * 100 if height < 3 else height))
+        if number_value is not None and 0 < number_value < 100:
+            player["number"] = int(number_value)
+        players.append(player)
+    deduped = {}
+    for player in players:
+        deduped.setdefault(player["canonicalPlayerId"], player)
+    return list(deduped.values())
+
+
+def supplement_real_rotation_players(
+    start_year: int, spec: dict, source_name: str, data_name: str | None,
+    packed: dict[str, list[dict]],
+) -> tuple[str | None, int]:
+    if start_year > 2023:
+        return data_name, 0
+    base, index = football_squads_index(start_year, spec)
+    if not index:
+        return data_name, 0
+    index_as_teams = {name: [{}] for name in index}
+    squad_name, _ = match_club(source_name, index_as_teams)
+    if not squad_name:
+        return data_name, 0
+    try:
+        squad = parse_football_squads(
+            fetch_text(f"{base}/{index[squad_name]}"), start_year, squad_name, spec["country"]
+        )
+    except Exception:
+        return data_name, 0
+    if not squad:
+        return data_name, 0
+    target = data_name or squad_name
+    current = packed.setdefault(target, [])
+    known_ids = {p.get("canonicalPlayerId") for p in current}
+    known_names = {identity_key(p.get("name", "")) for p in current}
+    added = 0
+    for player in squad:
+        if player["canonicalPlayerId"] in known_ids or identity_key(player["name"]) in known_names:
+            continue
+        current.append(player)
+        known_ids.add(player["canonicalPlayerId"])
+        known_names.add(identity_key(player["name"]))
+        added += 1
+    return target, added
 
 
 def normalize_player(row: dict[str, str], start_year: int, source: str):
@@ -514,7 +732,14 @@ def build_one(start_year: int, config: dict):
         club_matches = []
         matched_clubs: set[str] = set()
         for source_name in season_teams:
-            data_name, method = match_club(source_name, list(packed))
+            data_name, method = match_club(source_name, packed)
+            supplemented = 0
+            if not data_name or len(packed.get(data_name, [])) < 18:
+                data_name, supplemented = supplement_real_rotation_players(
+                    start_year, spec, source_name, data_name, packed
+                )
+                if supplemented:
+                    method = f"{method}+football-squads"
             if data_name:
                 matched_clubs.add(data_name)
                 club_countries[data_name] = spec["country"]
@@ -525,6 +750,7 @@ def build_one(start_year: int, config: dict):
                 "matchMethod": method,
                 "playersFound": len(packed.get(data_name, [])) if data_name else 0,
                 "rotationReady": len(packed.get(data_name, [])) >= 18 if data_name else False,
+                "supplementedRealPlayers": supplemented,
             })
         if league_name == "Premier League":
             premier_data_clubs = matched_clubs
